@@ -183,6 +183,30 @@
       margin: 0.5em auto;
     }
 
+    div.memo {
+      position: relative;
+      padding: 0.1em 0.5em;
+      border: 3px solid rgba(13,110,253,1);
+      border-radius: 0 10px 10px 10px;
+      background: rgba(218, 232, 253, 1);
+      margin-top: 72px;
+      font-size: 32px;
+    }
+    div.memo > p:first-child {
+      position: absolute;
+      top: -88px;
+      left: -3px;
+      height: 54px;
+      padding: 0 1em;
+      color: #fff;
+      border-radius: 10px 10px 0 0;
+      background: rgba(13,110,253,1);
+      font-weight: bold;
+    }
+    div.memo > :nth-child(n + 2) {
+      margin: 0.5em auto;
+    }
+
     span.remark {
       font-size: 32px;
       color: #444;
@@ -234,6 +258,89 @@ class: center, middle
 https://yuji.software/currentTimeMillis/
 ]
 
+---
+
+# 注意：実装依存
+
+* 本日の解説は、**Java 25** の **OpenJDK 実装**に基づく
+  * VM によって実装が異なる（OpenJ9 など）
+  * 今後のバージョンアップで、実装が変わることがある
+* あくまで**現時点での実装である**という点に注意
+
+---
+
+# System.currentTimeMillis() とは？
+
+* **現在時刻を取得するためのメソッド**
+* 戻り値は、1970年1月1日 0時0分0秒(UTC)からの経過ミリ秒（[UNIX time](https://ja.wikipedia.org/wiki/UNIX%E6%99%82%E9%96%93)）
+  * long 型なので、オーバーフロー（[2038年問題](https://ja.wikipedia.org/wiki/2038%E5%B9%B4%E5%95%8F%E9%A1%8C)）の心配はない
+* Java 1.0 から存在する
+
+.note[
+NOTE
+
+Java 8 以降では、より便利な [Insntat クラス](https://docs.oracle.com/javase/jp/24/docs/api/java.base/java/time/Instant.html)を使いましょう。
+]
+
+---
+
+# System.currentTimeMillis() のコード
+
+```java
+@IntrinsicCandidate
+public static native long currentTimeMillis();
+```
+
+* メソッド定義のみ
+  * native 修飾子がある → **C言語で実装されている**
+
+.memo[
+MEMO
+
+`@IntrinsicCandidate` については後ほど解説
+]
+
+---
+
+# native とは？
+
+* TODO
+
+---
+
+class: center, middle
+
+# native の先へ行ってみましょう！
+
+---
+
+# C言語のメソッド
+
+```c
+static JNINativeMethod methods[] = {
+  {"currentTimeMillis", "()J",              
+        (void *)&JVM_CurrentTimeMillis},
+  // 中略
+};
+```
+
+* `System.c` に定義がある
+* currentTimeMillis メソッドが **JVM_CurrentTimeMillis 関数**にバインディングされている
+
+---
+
+# JVM_CurrentTimeMillis の実装
+
+```c
+JVM_LEAF(jlong, JVM_CurrentTimeMillis(
+                    JNIEnv *env, jclass ignored))
+  return os::javaTimeMillis();
+JVM_END
+```
+
+* JVM_LEAF はマクロ
+  * Safepoint 不可・例外を発生させない・オブジェクトを参照しない**関数を定義する**
+* 実装は、**os ごとの処理に投げるだけ**
 
 ---
 
