@@ -314,18 +314,94 @@ class: center, middle
 
 ---
 
-# C言語のメソッド
+# native のコードはどこにある？ (1)
 
-```c
-static JNINativeMethod methods[] = {
-  {"currentTimeMillis", "()J",              
-        (void *)&JVM_CurrentTimeMillis},
-  // 中略
-};
+* OpenJDK のソースコードのどこかにあるはず
+* GitHub 上で検索してみよう！  
+  https://github.com/openjdk/jdk/
+
+```
+repo:openjdk/jdk currentTimeMillis
 ```
 
-* `System.c` に定義がある
-* currentTimeMillis メソッドが **JVM_CurrentTimeMillis 関数**にバインディングされている
+--
+→ 1,100 件ヒット orz
+
+---
+
+# native のコードはどこにある？ (2)
+
+* java のコードを除外してみる
+
+```
+repo:openjdk/jdk currentTimeMillis -language:java
+```
+
+→ 27件ヒット！
+
+---
+
+# System.c にあった
+
+* `src/java.base/share/native/libjava/System.c` がヒット
+* `methods` と言う配列が定義されている
+* ファイル名といい、コードといい、これっぽい
+
+```cpp
+static JNINativeMethod methods[] = {
+  {"currentTimeMillis", "()J",
+        (void *)&JVM_CurrentTimeMillis},
+// 略
+```
+
+* この配列をどこで使っている？
+
+---
+
+# methods 配列はどこで使われている？
+
+* 関数の引数 `methods` 配列を渡している
+  * RegisterNatives はネイティブメソッドの登録をする関数
+
+```cpp
+JNIEXPORT void JNICALL
+Java_java_lang_System_registerNatives(JNIEnv *env, jclass cls)
+{
+    (*env)->RegisterNatives(env, cls,
+        methods, sizeof(methods)/sizeof(methods[0]));
+}
+```
+
+* Java_java_ … と言うこの関数はどこから呼ばれる？
+  * JNIEXPORT ということは、Java から？
+
+---
+
+# System.java の実装
+
+* System クラスに registerNatives がある
+* これを static イニシャライザーで呼び出している
+
+```java
+private static native void registerNatives();
+
+static {
+    registerNatives();
+}
+````
+
+---
+
+# ここまでのまとめ
+
+1. 初期化
+  1. System クラスのロードに static イニシャライザーが呼ばれる
+  2. System.registerNatives() メソッドが呼ばれる
+  3. JNI 経由で C の 〜_registerNatives 関数が呼ばれる
+  4. RegisterNatives 関数で currentTimeMillis に対し JVM_CurrentTimeMillis が登録される
+2. 実行
+  1. System.currentTimeMillis() を呼ぶ
+  2. JNI 経由で JVM_CurrentTimeMillis() 関数が呼ばれる
 
 ---
 
@@ -340,10 +416,43 @@ JVM_END
 
 * JVM_LEAF はマクロ
   * Safepoint 不可・例外を発生させない・オブジェクトを参照しない**関数を定義する**
-* 実装は、**os ごとの処理に投げるだけ**
+* 処理概要
+  * **環境依存の関数 `javaTimeMillis()` に投げるだけ**
 
 ---
 
+# javaTimeMillis はどこに？
+
+* hotspot の下にある
+  * 📂**src/hotspot**
+      * 📁**share**: ヘッダ定義や共通の実装
+      * 📁**cpu**: CPU依存（x86_64, ARMなど）の実装
+      * 📁**os**: OS依存（Windows, Linux など）の実装
+      * 📁**os_cpu**: OS×CPU依存（linux_x86 など）の実装  
+      &nbsp
+* `javaTimeMillis()` の実装は** os の中にある**
+
+---
+
+# os の構造
+
+* aix / bsd / linux / posix / windows に分かれている
+* 実装階層
+  * POSIX
+      * AIX （IBMの商用UNIX）
+      * BSD UNIX（OpenBSD, macOS など）
+      * Linux（Ubuntu, RedHat Linux など）
+  * Windwos
+
+---
+
+# 速度差
+
+* この最適化は `-XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=_currentTimeMillis` で無効化できる
+
+```sh
+java -XX:+UnlockDiagnosticVMOptions -XX:+LogCompilation -XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=_currentTimeMillis -cp classes SimpleInliningTest
+```
 
 </textarea>
 <script type="text/javascript">
