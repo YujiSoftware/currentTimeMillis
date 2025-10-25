@@ -252,6 +252,11 @@ class: center, middle
 
 # 目次
 
+* 概要
+* native 実装を追う
+* バージョンによる違い
+* 最適化
+
 .note[
 資料のURL
 
@@ -265,22 +270,33 @@ https://yuji.software/currentTimeMillis/
 * 本日の解説は、**Java 25** の **OpenJDK 実装**に基づく
   * VM によって実装が異なる（OpenJ9 など）
   * 今後のバージョンアップで、実装が変わることがある
-* あくまで**現時点での実装である**という点に注意
+* あくまで**現時点での実装がこうなっている**という点に注意
 
 ---
 
 # System.currentTimeMillis() とは？
 
 * **現在時刻を取得するためのメソッド**
-* 戻り値は、1970年1月1日 0時0分0秒(UTC)からの経過ミリ秒（[UNIX time](https://ja.wikipedia.org/wiki/UNIX%E6%99%82%E9%96%93)）
-  * long 型なので、オーバーフロー（[2038年問題](https://ja.wikipedia.org/wiki/2038%E5%B9%B4%E5%95%8F%E9%A1%8C)）の心配はない
-* Java 1.0 から存在する
+* 戻り値は long 型
+  * 1970年1月1日 0時0分0.000秒(UTC)からの経過ミリ秒を表す（[UNIX time](https://ja.wikipedia.org/wiki/UNIX%E6%99%82%E9%96%93)）
+  * [2038年問題](https://ja.wikipedia.org/wiki/2038%E5%B9%B4%E5%95%8F%E9%A1%8C)の心配はない（最大値は 292,278,994 年）
+* **Java 1.0 から存在する**
 
 .note[
 NOTE
 
 Java 8 以降では、より便利な [Insntat クラス](https://docs.oracle.com/javase/jp/24/docs/api/java.base/java/time/Instant.html)を使いましょう。
 ]
+
+
+???
+
+オーバーフローするのは、西暦2億年9227万8994年8月17日
+
+```java
+jshell> Instant.ofEpochMilli(Long.MAX_VALUE)
+$1 ==> +292278994-08-17T07:12:55.807Z
+```
 
 ---
 
@@ -291,8 +307,8 @@ Java 8 以降では、より便利な [Insntat クラス](https://docs.oracle.co
 public static native long currentTimeMillis();
 ```
 
-* メソッド定義のみ
-  * native 修飾子がある → **C言語で実装されている**
+* System.java にはメソッド定義のみ
+  * **native 修飾子**がある → **C言語で実装されている**
 
 .memo[
 MEMO
@@ -317,51 +333,48 @@ class: center, middle
 # native のコードはどこにある？ (1)
 
 * OpenJDK のソースコードのどこかにあるはず
-* GitHub 上で検索してみよう！  
+* GitHub 上で "currentTimeMillis" を検索してみよう！  
   https://github.com/openjdk/jdk/
 
-```
-repo:openjdk/jdk currentTimeMillis
-```
-
 --
-→ 1,100 件ヒット orz
+<br>
+→ **1,100 件ヒット**  
+→ どれかわからない…
 
 ---
 
 # native のコードはどこにある？ (2)
 
 * java のコードを除外してみる
+  * "currentTimeMillis -language:java" で検索
 
-```
-repo:openjdk/jdk currentTimeMillis -language:java
-```
-
-→ 27件ヒット！
+<br>
+→ **27件ヒット！**  
+→ ざっと目を通してみる
 
 ---
 
 # System.c にあった
 
-* `src/java.base/share/native/libjava/System.c` がヒット
+* `src/java.base/share/native/libjava/System.c` と言うファイルがヒットしている
 * `methods` と言う配列が定義されている
-* ファイル名といい、コードといい、これっぽい
 
 ```cpp
 static JNINativeMethod methods[] = {
   {"currentTimeMillis", "()J",
         (void *)&JVM_CurrentTimeMillis},
-// 略
+// 以下略
 ```
 
-* この配列をどこで使っている？
+* ファイル名といい、コードといい、これっぽい
+* あってる？
 
 ---
 
 # methods 配列はどこで使われている？
 
-* 関数の引数 `methods` 配列を渡している
-  * RegisterNatives はネイティブメソッドの登録をする関数
+* **RegisterNatives 関数**の引数で `methods` 配列を使っている  
+  ↑ ネイティブメソッドの登録をする関数
 
 ```cpp
 JNIEXPORT void JNICALL
@@ -372,7 +385,7 @@ Java_java_lang_System_registerNatives(JNIEnv *env, jclass cls)
 }
 ```
 
-* Java_java_ … と言うこの関数はどこから呼ばれる？
+* Java\_java\_ … と言うこの関数はどこから呼ばれる？
   * JNIEXPORT ということは、Java から？
 
 ---
@@ -388,36 +401,71 @@ private static native void registerNatives();
 static {
     registerNatives();
 }
-````
+```
 
 ---
 
-# ここまでのまとめ
+# 以下の手順で登録されている
 
-1. 初期化
-  1. System クラスのロードに static イニシャライザーが呼ばれる
-  2. System.registerNatives() メソッドが呼ばれる
-  3. JNI 経由で C の 〜_registerNatives 関数が呼ばれる
-  4. RegisterNatives 関数で currentTimeMillis に対し JVM_CurrentTimeMillis が登録される
-2. 実行
-  1. System.currentTimeMillis() を呼ぶ
-  2. JNI 経由で JVM_CurrentTimeMillis() 関数が呼ばれる
+1. System クラスのロード時に、 static イニシャライザーを実行
+2. System.registerNatives() メソッドを実行
+3. JNI 経由で C の Java_java_lang_System_registerNatives 関数を実行
+4. RegisterNatives 関数でマッピングを登録
+
+<br>
+→ Java の currentTimeMillis メソッドに対し C の JVM_CurrentTimeMillis 関数が登録される
 
 ---
 
-# JVM_CurrentTimeMillis の実装
+# JVM_CurrentTimeMillis はどこ？
 
-```c
+* GitHub 上で "JVM_CurrentTimeMillis" を検索  
+→ 10件ヒット  
+<br>
+* **awt_** で始まるファイル名は違いそう（7つ）
+  * Abstract Window Toolkit というGUIライブラリの実装
+* **System.c** ← さっき見た
+* **jvm.h** ← ヘッダファイル（関数定義のみ）
+* **jvm.cpp** ← これ？
+
+---
+
+# jvm.cpp にある実装
+
+```cpp
 JVM_LEAF(jlong, JVM_CurrentTimeMillis(
                     JNIEnv *env, jclass ignored))
   return os::javaTimeMillis();
 JVM_END
 ```
 
-* JVM_LEAF はマクロ
-  * Safepoint 不可・例外を発生させない・オブジェクトを参照しない**関数を定義する**
+--
+
+* JVM_LEAF は**関数を定義するマクロ**
+  * Safepoint 不可・例外を発生させない・オブジェクトを参照しない関数を定義する
 * 処理概要
-  * **環境依存の関数 `javaTimeMillis()` に投げるだけ**
+  * **環境依存の関数 `javaTimeMillis()` を実行するだけ**
+
+---
+
+# 
+
+
+
+---
+
+# POSIX?
+
+* OS の標準規格
+  * 
+  * ソースコードレベルの移植性を確保している
+* 主な実装
+  * FreeBSD, AIX, macOS などの Unix 系 OS
+  * CentOS, Ubuntu などの Linux 系 OS
+
+???
+* [POSIX準拠とは本当はどういうことなのか？「POSIXで規定されたものだけを使う」ではありません #ShellScript - Qiita](https://qiita.com/ko1nksm/items/08228276ce9335592989)
+* [1993年から Windows は POSIX 準拠だという話 #UNIX - Qiita](https://qiita.com/ko1nksm/items/f257770769ce62436bc1)
 
 ---
 
@@ -439,8 +487,8 @@ JVM_END
 * aix / bsd / linux / posix / windows に分かれている
 * 実装階層
   * POSIX
-      * AIX （IBMの商用UNIX）
-      * BSD UNIX（OpenBSD, macOS など）
+      * AIX （IBMの商用Unix）
+      * BSD Unix（FreeBSD, macOS など）
       * Linux（Ubuntu, RedHat Linux など）
   * Windwos
 
