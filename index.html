@@ -254,7 +254,7 @@ class: center, middle
 
 * System.currentTimeMillis() の概要
 * native 実装を追う
-* 最適化による影響
+* 最適化の効果
 
 .note[
 資料のURL
@@ -277,7 +277,6 @@ https://yuji.software/currentTimeMillis/
 
 * **現在時刻を取得するためのメソッド**
 * 戻り値は、1970年1月1日 0時0分0.000秒(UTC)からの経過時刻を表す（[UNIX time](https://ja.wikipedia.org/wiki/UNIX%E6%99%82%E9%96%93)）
-  * 単位は**ミリ秒**
   * 戻り値の型は long
     * [2038年問題](https://ja.wikipedia.org/wiki/2038%E5%B9%B4%E5%95%8F%E9%A1%8C)の心配はない（最大値は 292,278,994 年）
 * **Java 1.0 から存在する**
@@ -298,7 +297,7 @@ $1 ==> +292278994-08-17T07:12:55.807Z
 
 ---
 
-# System.currentTimeMillis() のコード
+# currentTimeMillis() のコード
 
 ```java
 @IntrinsicCandidate
@@ -374,7 +373,7 @@ static JNINativeMethod methods[] = {
 
 # methods 配列はどこで使われている？
 
-* **RegisterNatives 関数**の引数で `methods` 配列を使っている  
+* **RegisterNatives 関数**の引数として使っている  
   ↑ JNI のネイティブメソッド登録をする関数
 
 ```cpp
@@ -452,31 +451,46 @@ JVM_END
 # os::javaTimeMillis() の実装はどこ？
 
 * os 層に実装がある
-* os.cpp：全OS共通の実装
-  * os_posix.cpp：POSIX系OS共通の処理
-      * os_aix.cpp：IBM の商用 Unix の処理
-      * os_bsd.cpp：BSD Unix（FreeBSD, macOS など）の処理
-      * os_linux.cpp：Linux（Ubuntu, RedHat Linux など）の処理
-  * os_windows.cpp：Windowsの実装
+* **os.cpp**：全OS共通の実装
+  * **os_windows.cpp**：Windowsの実装
+  * **os_posix.cpp**：POSIX系OS共通の実装
+      * **os_aix.cpp**：IBM の商用 Unix
+      * **os_bsd.cpp**：BSD Unix（FreeBSD, macOS など）
+      * **os_linux.cpp**：Linux（Ubuntu, CentOS など）  
+<br>
 * このうち、os_posix.cpp, os_windows.cpp に実装がある
 
 ---
 
 # os_posix.cpp での実装
 
+```cpp
+jlong os::javaTimeMillis() {
+  struct timespec ts;
+  int status = clock_gettime(CLOCK_REALTIME, &ts);
+  return jlong(ts.tv_sec) * MILLIUNITS +
+    jlong(ts.tv_nsec) / NANOUNITS_PER_MILLIUNIT;
+}
+```
+
 * `clock_gettime(CLOCK_REALTIME, res);` 関数で現在時刻を取得している
-  * clock_gettime は時刻取得をするシステムコール
+  * clock_gettime は**時刻取得をするシステムコール**
 * 詳細は `man 2 clock_gettime` コマンドで確認できる
+
+???
+
+Ubuntu だと、manpage-ja-dev のインストールが必要
+`sudo apt-get install manpages-ja-dev`
 
 ---
 
 # clock_gettime の概要
 
-* 引数で、時刻の種類を指定する
-  * CLOCK_REALTIME の場合
-    * システムで**一意な実時間を取得する**
-    * 引数で渡した構造体に、1970/1/1 0:00:00 からの**秒とナノ秒**を格納する
-    * システム時刻の不連続な影響（手動での時刻変更）や、段階的な調整（NTPによる補正）の**影響を受ける**
+* 引数で、**時刻の種類を指定する**
+* CLOCK_REALTIME の場合
+  * システムで**一意な実時間を取得する**
+  * 引数で渡された構造体に、**1970/1/1 0:00:00 からの秒+ナノ秒**を格納する
+  * システム時刻の不連続な影響（手動での時刻変更）や、段階的な調整（NTPによる補正）の**影響を受ける**
 
 ---
 
@@ -492,28 +506,40 @@ JVM_END
 
 # 以前の実装
 
-* clock_gettime を使うようになったのは Java 15 から
-* それまでは、gettimeofday を使っていた
+* clock_gettime関数を使うようになったのは **Java 15 から**
+* それまでは、gettimeofday関数を使っていた
+--
 * 変更理由
-  * Instant クラスの精度向上のため
-    * gettimeofday の分解能は1マイクロ秒
-    * clock_gettime は分解能は1ナノ秒
-  * （実装は独立しているが、念のため実装を揃えておくことになった）
+  * **Instant クラスの精度向上のため**
+      * clock_gettime の分解能は1ナノ秒
+      * gettimeofday の分解能は1マイクロ秒
+  * 実装は独立しているが、念のため実装を揃えておくことになった
+
+---
+
+# os_windows.cpp での実装
+
+```cpp
+jlong os::javaTimeMillis() {
+  FILETIME wt;
+  GetSystemTimeAsFileTime(&wt);
+  return windows_to_java_time(wt);
+}
+```
 
 ---
 
 # os_windows.cpp での実装
 
 * `GetSystemTimeAsFileTime` 関数で現在時刻を取得している
-  * 引数で指定した構造体に、1601/1/1 12:00:00秒(UTC)からの経過したナノ秒を100で割った値を格納する
-  * javaTimeMillis() 内で UnixTime に変換している
+  * 引数で指定された構造体に、**1601/1/1 0:00:00(UTC)**からの経過ナノ秒を100で割った値を格納する
+  * これを javaTimeMillis() 内で UnixTime に変換している
 
 .memo[
 なんで 1601年1月1日？
 
-David Cutler 氏いわく
 * グレゴリオ暦は400年周期
-* Windows NT を設計当時、その周期の開始年が1601年だった
+* Windows NT の設計当時、その周期の開始年が1601年だった
 ]
 
 ---
@@ -613,7 +639,7 @@ public static native long currentTimeMillis();
 
 # 参考資料
 
-
+* [Why is the Win32 epoch January 1, 1601? - The Old New Thing](https://devblogs.microsoft.com/oldnewthing/20090306-00/?p=18913)
 
 </textarea>
 <script type="text/javascript">
