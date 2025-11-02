@@ -254,7 +254,7 @@ class: center, middle
 
 * System.currentTimeMillis() の概要
 * native 実装を追う
-* 最適化の効果
+* 実際の動き（最適化による変化）
 
 .note[
 資料のURL
@@ -322,15 +322,7 @@ class: center, middle
 
 ---
 
-# 解説の流れ
-
-* 以下の2つを見る
-  1. 初期化処理の確認
-  2. 時刻取得処理の確認
-
----
-
-# native のコードはどこにある？ (1)
+# native のコードはどこにある？
 
 * OpenJDK のソースコードのどこかにあるはず
 * GitHub 上で "currentTimeMillis" を検索してみよう！  
@@ -343,21 +335,21 @@ class: center, middle
 
 ---
 
-# native のコードはどこにある？ (2)
+# native のコードはどこにある？
 
 * java のコードを除外してみる
   * "currentTimeMillis -language:java" で検索
 
+--
 <br>
 → **27件ヒット！**  
 → ざっと目を通してみる
 
 ---
 
-# System.c にある
+# System.c を見てみる
 
-* `src/java.base/share/native/libjava/System.c` と言うファイルがヒットしている
-* `methods` と言う配列が定義されている
+* `src/java.base/share/native/libjava/System.c` と言うファイルの **methods と言う配列がヒット**
 
 ```cpp
 static JNINativeMethod methods[] = {
@@ -367,6 +359,7 @@ static JNINativeMethod methods[] = {
 ```
 
 * ファイル名といい、コードといい、これっぽい
+* **JVM_CurrentTimeMillis 関数を登録している？**
 * あってる？
 
 ---
@@ -374,7 +367,7 @@ static JNINativeMethod methods[] = {
 # methods 配列はどこで使われている？
 
 * **RegisterNatives 関数**の引数として使っている  
-  ↑ JNI のネイティブメソッド登録をする関数
+  ↑ **JNI** のネイティブメソッド登録をする関数
 
 ```cpp
 JNIEXPORT void JNICALL
@@ -407,13 +400,12 @@ static {
 
 # 初期化の流れ
 
-1. System クラスのロード時に、 static イニシャライザーを実行
+1. System クラスのロード時に static イニシャライザーを実行
 2. System.registerNatives() メソッドを実行
 3. JNI 経由で C の Java_java_lang_System_registerNatives 関数を実行
-4. RegisterNatives 関数でマッピングを登録
-
-<br>
-→ Java の currentTimeMillis メソッドに対し、JNI 経由で C の JVM_CurrentTimeMillis 関数を呼び出す
+4. RegisterNatives 関数で**マッピングを登録**
+  * Java の currentTimeMillis メソッドに対し、  
+  JNI 経由で C の JVM_CurrentTimeMillis 関数を呼び出す
 
 ---
 
@@ -487,33 +479,22 @@ Ubuntu だと、manpage-ja-dev のインストールが必要
 # clock_gettime の概要
 
 * 引数で、**時刻の種類を指定する**
-* CLOCK_REALTIME の場合
-  * システムで**一意な実時間を取得する**
-  * 引数で渡された構造体に、**1970/1/1 0:00:00 からの秒+ナノ秒**を格納する
+* *CLOCK_REALTIME* の場合
+  * 引数で渡された構造体に、**1970/1/1 0:00:00 からの秒とナノ秒**を格納
   * システム時刻の不連続な影響（手動での時刻変更）や、段階的な調整（NTPによる補正）の**影響を受ける**
-
----
-
-# CLOCK_REALTIME の精度
-
-* man ページによれば、分解能を clock_getres() で取得できる
-* 実際にやってみた
-   * x86_64 (AMD Ryzen): 
-   * ARM（Raspberry Pi 3）: 
-* 環境によって異なる値になることもある（はず）
 
 ---
 
 # 以前の実装
 
 * clock_gettime関数を使うようになったのは **Java 15 から**
-* それまでは、gettimeofday関数を使っていた
+  * それまでは、**gettimeofday**関数を使っていた
 --
 * 変更理由
-  * **Instant クラスの精度向上のため**
-      * clock_gettime の分解能は1ナノ秒
-      * gettimeofday の分解能は1マイクロ秒
-  * 実装は独立しているが、念のため実装を揃えておくことになった
+  * Instant.now() の内部実装が、精度向上のため clock_gettime に変更になった
+      * gettimeofday の分解能は **1マイクロ秒**
+      * clock_gettime の分解能は **1ナノ秒**
+  * currentTimeMillis() とは実装が独立しているが、念のため同じ関数を使うことにした
 
 ---
 
@@ -527,13 +508,15 @@ jlong os::javaTimeMillis() {
 }
 ```
 
+* **etSystemTimeAsFileTime** 関数を使っている
+* そのあと、Java Time に変換している？
+
 ---
 
-# os_windows.cpp での実装
+# GetSystemTimeAsFileTime 関数
 
-* `GetSystemTimeAsFileTime` 関数で現在時刻を取得している
+* 現在時刻を取得する Win32 API
   * 引数で指定された構造体に、**1601/1/1 0:00:00(UTC)**からの経過ナノ秒を100で割った値を格納する
-  * これを javaTimeMillis() 内で UnixTime に変換している
 
 .memo[
 なんで 1601年1月1日？
@@ -544,27 +527,19 @@ jlong os::javaTimeMillis() {
 
 ---
 
-# OS から先の実装
+# 参考：OS から先の実装
 
 * ハードウェアから現在時刻を得る
-* 具体的には、x86_64 の RDTSC 命令を活用する
-  * RDTSC: Read Time Stamp Counter
-  * 起動時から一定周期（数GHz）でカウントアップした値を返す命令
+  * 具体的には、x86_64 の RDTSC 命令を活用する
+      * RDTSC: Read Time Stamp Counter
+      * 起動時から一定ペース（数GHz）でカウントアップした値を返す
 * OSが保持しているある時点での時刻情報に TSC で取得した値を足して、それを補正したものを現在時刻とする
 
 ---
 
 # ここまでのまとめ
 
-* System.currentTimeMillis()
-↓ JNI 経由で呼び出し
-* JVM_CurrentTimeMillis()
-↓ OSごとの関数を呼び出し（コンパイル時）
-* os::javaTimeMillis()
-↓
-* システムコール
-↓
-* ハードウェアの時刻ソースから値を取得
+<img src="img/flow.svg" height="520px" style="display: block; margin: auto;">
 
 ---
 
@@ -580,9 +555,8 @@ public static native long currentTimeMillis();
 ```
 
 * @IntrinsicCandidate とは
-  * 「最適化が行われるメソッド」を表すアノテーション
-  * 人間用の目印  
-  = アノテーションの有無で動きは変わらない
+  * **JIT最適化の対象であることを表す**アノテーション  
+  <br>
 * どのような最適化が行われているのか？
 
 ---
@@ -605,35 +579,22 @@ public static native long currentTimeMillis();
 # JITによる効果
 
 * 起動オプション `-XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=_currentTimeMillis` で無効化できる
-
-* 1億回の System.currentTimeMillis() の呼び出しにかかる時間
+* 1億回の System.currentTimeMillis() の呼び出しにかかる時間の比較
   * 無効：
   * 有効：
-
----
-
-# OSでの最適化（vDSO）
-
-* clock_gettime は本来システムコール（カーネルの処理呼び出し）
-  * システムコールはオーバーヘッドが大きい
-* vDSO という仕組みにより、システムコールを回避する
-* Windows でも同様の仕組みがある
-
----
-
-# vDSOによる効果
-
-
 
 ---
 
 # なぜ最適化するのか
 
 * 使われる頻度が高く、パフォーマンス向上が見込めるから
-  * ログの出力時とか、
-* ターンアラウンドタイムが大きいと、精度が落ちるから
+* **ターンアラウンドタイムが大きいと、精度が落ちるから**
 
 ---
+
+# まとめ
+
+
 
 ---
 
