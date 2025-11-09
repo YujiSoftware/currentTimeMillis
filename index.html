@@ -412,7 +412,10 @@ static {
 # JVM_CurrentTimeMillis はどこ？
 
 * GitHub 上で "JVM_CurrentTimeMillis" を検索  
-→ 10件ヒット  
+→ 10件ヒット 
+
+--
+ 
 <br>
 * **awt_** で始まるファイル名は違いそう（7つ）
   * Abstract Window Toolkit というGUIライブラリの実装
@@ -442,14 +445,14 @@ JVM_END
 
 # os::javaTimeMillis() の実装はどこ？
 
-* os 層に実装がある
+* JVM の os 層にある  
 * **os.cpp**：全OS共通の実装
-  * **os_windows.cpp**：Windowsの実装
   * **os_posix.cpp**：POSIX系OS共通の実装
       * **os_aix.cpp**：IBM の商用 Unix
       * **os_bsd.cpp**：BSD Unix（FreeBSD, macOS など）
-      * **os_linux.cpp**：Linux（Ubuntu, CentOS など）  
-<br>
+      * **os_linux.cpp**：Linux（Ubuntu, CentOS など）
+  * **os_windows.cpp**：Windowsの実装  
+  <br>
 * このうち、os_posix.cpp, os_windows.cpp に実装がある
 
 ---
@@ -466,7 +469,7 @@ jlong os::javaTimeMillis() {
 ```
 
 * `clock_gettime(CLOCK_REALTIME, res);` 関数で現在時刻を取得している
-  * clock_gettime は**時刻取得をするシステムコール**
+  * **時刻を取得するシステムコール**
 * 詳細は `man 2 clock_gettime` コマンドで確認できる
 
 ???
@@ -478,11 +481,12 @@ Ubuntu だと、manpage-ja-dev のインストールが必要
 
 # clock_gettime の概要
 
-* 引数で、**時刻の種類を指定する**
-* *CLOCK_REALTIME* の場合
-  * 引数で渡された構造体に、**1970/1/1 0:00:00 からの秒とナノ秒**を格納
+* 引数で、**取得したい時間の種類を指定する**
+* CLOCK_REALTIME（実時間）の場合
+  * **1970/01/01 00:00:00 からの秒とナノ秒**を取得
+      * UnixTime と呼ばれるもの
   * システム時刻の不連続な影響（手動での時刻変更）や、段階的な調整（NTPによる補正）の**影響を受ける**
-
+      * つまり、単調増加とは限らない
 ---
 
 # 以前の実装
@@ -508,15 +512,17 @@ jlong os::javaTimeMillis() {
 }
 ```
 
-* **etSystemTimeAsFileTime** 関数を使っている
+* **GetSystemTimeAsFileTime** 関数を実行している
 * そのあと、Java Time に変換している？
 
 ---
 
-# GetSystemTimeAsFileTime 関数
+# os_windows.cpp の処理
 
-* 現在時刻を取得する Win32 API
-  * 引数で指定された構造体に、**1601/1/1 0:00:00(UTC)**からの経過ナノ秒を100で割った値を格納する
+* **GetSystemTimeAsFileTime** 関数を実行
+  * 現在時刻を取得する Win32 API
+      * **1601/01/01 00:00:00(UTC)**からのナノ秒を100で割った値を返す（= 分解能は 100ナノ秒）
+* 取得した時刻を、Unix Time に変換
 
 .memo[
 なんで 1601年1月1日？
@@ -530,10 +536,10 @@ jlong os::javaTimeMillis() {
 # 参考：OS から先の実装
 
 * ハードウェアから現在時刻を得る
-  * 具体的には、x86_64 の RDTSC 命令を活用する
-      * RDTSC: Read Time Stamp Counter
-      * 起動時から一定ペース（数GHz）でカウントアップした値を返す
-* OSが保持しているある時点での時刻情報に TSC で取得した値を足して、それを補正したものを現在時刻とする
+  * 最近では、CPU の TSC（Time Stamp Counter）を利用
+      * 起動から、一定ペース（数GHz）でカウントアップしている値
+      * x86_64 の場合、RDTSC 命令で取得
+  * OSが保持しているある時点での時刻情報と TSC を組み合わせて、それを補正したものを現在時刻とする
 
 ---
 
@@ -543,7 +549,12 @@ jlong os::javaTimeMillis() {
 
 ---
 
-# 最適化
+
+class: center, middle
+
+# ただし、常にこの通りに
+# 動いているわけではない
+
 
 ---
 
@@ -554,8 +565,8 @@ jlong os::javaTimeMillis() {
 public static native long currentTimeMillis();
 ```
 
-* @IntrinsicCandidate とは
-  * **JIT最適化の対象であることを表す**アノテーション  
+* @IntrinsicCandidate が付与されている
+  * **HotSpot VM による最適化の対象であることを示す**アノテーション  
   <br>
 * どのような最適化が行われているのか？
 
@@ -600,7 +611,9 @@ public static native long currentTimeMillis();
 
 # 参考資料
 
+* [Java API Documentation Version 1.0.2 - §1.18 Class System](https://javaalmanac.io/jdk/1.0/api/java.lang.System.html#10810)
 * [Why is the Win32 epoch January 1, 1601? - The Old New Thing](https://devblogs.microsoft.com/oldnewthing/20090306-00/?p=18913)
+* [高解像度タイム スタンプの取得 - Win32 apps | Microsoft Learn](https://learn.microsoft.com/ja-jp/windows/win32/sysinfo/acquiring-high-resolution-time-stamps)
 
 </textarea>
 <script type="text/javascript">
