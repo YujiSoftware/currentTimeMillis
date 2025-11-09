@@ -254,7 +254,7 @@ class: center, middle
 
 * System.currentTimeMillis() の概要
 * native 実装を追う
-* 実際の動き（最適化による変化）
+* 最適化による変化
 
 .note[
 資料のURL
@@ -276,7 +276,7 @@ https://yuji.software/currentTimeMillis/
 # System.currentTimeMillis() とは？
 
 * **現在時刻を取得するためのメソッド**
-* 戻り値は、1970年1月1日 0時0分0.000秒(UTC)からの経過時刻を表す（[UNIX time](https://ja.wikipedia.org/wiki/UNIX%E6%99%82%E9%96%93)）
+* 戻り値は、1970年1月1日 0時0分0.000秒(UTC)から経過したミリ秒を表す（[UNIX time](https://ja.wikipedia.org/wiki/UNIX%E6%99%82%E9%96%93)）
   * 戻り値の型は long
     * [2038年問題](https://ja.wikipedia.org/wiki/2038%E5%B9%B4%E5%95%8F%E9%A1%8C)の心配はない（最大値は 292,278,994 年）
 * **Java 1.0 から存在する**
@@ -306,7 +306,8 @@ public static native long currentTimeMillis();
 
 * System.java には**メソッド定義のみ**
   * **native 修飾子**がある
-  * **処理はC言語で実装されている**
+  * つまり、**処理はC言語で実装されている**
+      * C言語側の関数を「ネイティブ関数」と呼ぶ
 
 .memo[
 MEMO
@@ -322,52 +323,57 @@ class: center, middle
 
 ---
 
-# native のコードはどこにある？
+# 処理の流れ
 
-* OpenJDK のソースコードのどこかにあるはず
-* GitHub 上で "currentTimeMillis" を検索してみよう！  
-  https://github.com/openjdk/jdk/
-
---
-<br>
-→ **1,100 件ヒット**  
-→ どれかわからない…
+<img src="img/flow.svg" height="520px" style="display: block; margin: auto;">
 
 ---
 
-# native のコードはどこにある？
+# native から先を追うのに必要なもの
 
-* java のコードを除外してみる
-  * "currentTimeMillis -language:java" で検索
-
---
-<br>
-→ **27件ヒット！**  
-→ ざっと目を通してみる
+* **JNI の知識**
+  * 標準APIの native メソッドも、JNI を利用しているため
+  * 「**ネイティブ関数の解決ルール**」を把握しておけばOK  
+     * ↑ Java の native メソッドに対し、どのネイティブ関数を実行するか決定する取り決め
+* **C, C++ の知識**
+  * 今回の処理程度なら、なんとなくで構わない
 
 ---
 
-# System.c を見てみる
+# ネイティブ関数の解決ルール
 
-* `src/java.base/share/native/libjava/System.c` と言うファイルの **methods と言う配列がヒット**
+* 2種類あり、状況により使い分ける
+* **ネーミングルール**による解決（動的解決）
+  * 「"Java\_" + *クラス完全名* + "\_" + *メソッド名*」という命名規則でネイティブ関数を用意する
+    * この名前にしておくと、native メソッドが呼ばれた際に VM が自動で見つけてくれる
+* **関数登録**による解決（静的解決）
+  * RegisterNatives 関数で、Java のメソッド名と対応するネイティブ関数のポインタを登録しておく
+  
+---
 
-```cpp
-static JNINativeMethod methods[] = {
-  {"currentTimeMillis", "()J",
-        (void *)&JVM_CurrentTimeMillis},
-// 以下略
+class: center, middle
+
+## currentTimeMillis の場合
+
+---
+
+# System.java の実装
+
+* System クラスの static イニシャライザーで、registerNatives という native メソッドを実行
+
+```java
+private static native void registerNatives();
+
+static {
+    registerNatives();
+}
 ```
 
-* ファイル名といい、コードといい、これっぽい
-* **JVM_CurrentTimeMillis 関数を登録している？**
-* あってる？
+⇒ ネイティブ関数 **Java_java_lang_System_registerNatives** が呼ばれる
 
 ---
 
-# methods 配列はどこで使われている？
-
-* **RegisterNatives 関数**の引数として使っている  
-  ↑ **JNI** のネイティブメソッド登録をする関数
+# JVM_CurrentTimeMillis 関数を登録
 
 ```cpp
 JNIEXPORT void JNICALL
@@ -378,54 +384,16 @@ Java_java_lang_System_registerNatives(JNIEnv *env, jclass cls)
 }
 ```
 
-* Java\_java\_ … と言うこの関数はどこから呼ばれる？
-  * JNIEXPORT ということは、Java から？
-
----
-
-# System.java の実装
-
-* System クラスに registerNatives がある
-* これを static イニシャライザーで呼び出している
-
-```java
-private static native void registerNatives();
-
-static {
-    registerNatives();
-}
+```cpp
+static JNINativeMethod methods[] = {
+  {"currentTimeMillis", "()J",
+        (void *)&JVM_CurrentTimeMillis},
+// 以下略
 ```
 
 ---
 
-# 初期化の流れ
-
-1. System クラスのロード時に static イニシャライザーを実行
-2. System.registerNatives() メソッドを実行
-3. JNI 経由で C の Java_java_lang_System_registerNatives 関数を実行
-4. RegisterNatives 関数で**マッピングを登録**
-  * Java の currentTimeMillis メソッドに対し、  
-  JNI 経由で C の JVM_CurrentTimeMillis 関数を呼び出す
-
----
-
-# JVM_CurrentTimeMillis はどこ？
-
-* GitHub 上で "JVM_CurrentTimeMillis" を検索  
-→ 10件ヒット 
-
---
- 
-<br>
-* **awt_** で始まるファイル名は違いそう（7つ）
-  * Abstract Window Toolkit というGUIライブラリの実装
-* **System.c** ← さっき見た
-* **jvm.h** ← ヘッダファイル（関数定義のみ）
-* **jvm.cpp** ← これ？
-
----
-
-# jvm.cpp にある実装
+# JVM_CurrentTimeMillis の処理
 
 ```cpp
 JVM_LEAF(jlong, JVM_CurrentTimeMillis(
@@ -446,13 +414,14 @@ JVM_END
 # os::javaTimeMillis() の実装はどこ？
 
 * JVM の os 層にある  
+<hr>
 * **os.cpp**：全OS共通の実装
   * **os_posix.cpp**：POSIX系OS共通の実装
       * **os_aix.cpp**：IBM の商用 Unix
       * **os_bsd.cpp**：BSD Unix（FreeBSD, macOS など）
       * **os_linux.cpp**：Linux（Ubuntu, CentOS など）
   * **os_windows.cpp**：Windowsの実装  
-  <br>
+<hr>
 * このうち、os_posix.cpp, os_windows.cpp に実装がある
 
 ---
@@ -512,9 +481,6 @@ jlong os::javaTimeMillis() {
 }
 ```
 
-* **GetSystemTimeAsFileTime** 関数を実行している
-* そのあと、Java Time に変換している？
-
 ---
 
 # os_windows.cpp の処理
@@ -536,10 +502,10 @@ jlong os::javaTimeMillis() {
 # 参考：OS から先の実装
 
 * ハードウェアから現在時刻を得る
-  * 最近では、CPU の TSC（Time Stamp Counter）を利用
+  * 最近は、CPU の **TSC（Time Stamp Counter）**を利用
       * 起動から、一定ペース（数GHz）でカウントアップしている値
       * x86_64 の場合、RDTSC 命令で取得
-  * OSが保持しているある時点での時刻情報と TSC を組み合わせて、それを補正したものを現在時刻とする
+  * OSが保持している**ある時点での時刻情報と TSC を組み合わせ**て、それを補正したものを現在時刻とする
 
 ---
 
@@ -566,30 +532,25 @@ public static native long currentTimeMillis();
 ```
 
 * @IntrinsicCandidate が付与されている
-  * **HotSpot VM による最適化の対象であることを示す**アノテーション  
-  <br>
-* どのような最適化が行われているのか？
+  * **HotSpot VM による個別最適化の対象であることを示す**アノテーション  
+--
+* 今回は、JIT (Just In Time) コンパイル時に適用される
+  * System.currentTimeMillis() の呼び出しで、os::javaTimeMillis() を直接実行するようになる
+  * **つまり、JNI 呼び出しがなくなる！**
 
 ---
 
-# 最適化（JIT）
+# JITコンパイル後の動き
 
-* JIT(Just In Time)コンパイルによって動きが変わる
-  * 大体300回ぐらい（状況による）コードが実行されると行われる
-* System.currentTimeMillis() の呼び出しで、os::javaTimeMillis() を直接実行するようになる
-  * つまり、JNI 呼び出しがなくなる！
+<img src="img/flow_jit.svg" height="520px" style="display: block; margin: auto;">
 
 ---
 
-# JITの実装
+# 最適化による効果
 
-
-
----
-
-# JITによる効果
-
-* 起動オプション `-XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=_currentTimeMillis` で無効化できる
+* JNI によるオーバーヘッドがなくなる
+<hr>
+* 起動オプション `-XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=_currentTimeMillis` で最適化を無効化できる
 * 1億回の System.currentTimeMillis() の呼び出しにかかる時間の比較
   * 無効：
   * 有効：
@@ -600,18 +561,25 @@ public static native long currentTimeMillis();
 
 * 使われる頻度が高く、パフォーマンス向上が見込めるから
 * **ターンアラウンドタイムが大きいと、精度が落ちるから**
+  * OSも時刻取得関数は最適化している（vDSO）
 
 ---
 
 # まとめ
 
-
+* native の先にも処理は続いている
+  * Java → JVM → OS → ハードウェア
+* ざっくり理解するぐらいならハードルは低い
+* ただし、@IntrinsicCandidate アノテーションがある場合、最適化による変化に注意  
+<br>
+* **ぜひ、興味のある native メソッドを読んでみましょう！**
 
 ---
 
 # 参考資料
 
 * [Java API Documentation Version 1.0.2 - §1.18 Class System](https://javaalmanac.io/jdk/1.0/api/java.lang.System.html#10810)
+* [Java Native Interface仕様](https://docs.oracle.com/javase/jp/24/docs/specs/jni/index.html)
 * [Why is the Win32 epoch January 1, 1601? - The Old New Thing](https://devblogs.microsoft.com/oldnewthing/20090306-00/?p=18913)
 * [高解像度タイム スタンプの取得 - Win32 apps | Microsoft Learn](https://learn.microsoft.com/ja-jp/windows/win32/sysinfo/acquiring-high-resolution-time-stamps)
 
