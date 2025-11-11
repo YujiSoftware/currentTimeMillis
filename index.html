@@ -323,43 +323,39 @@ class: center, middle
 
 ---
 
-# 処理の流れ
+# 最初の一歩
 
-<img src="img/flow.svg" height="520px" style="display: block; margin: auto;">
+* currentTimeMillis() に対応するネイティブ関数はどれ？
+  * JNI（Java Native Interface）の「**ネイティブ関数の解決ルール**」で決まる
 
----
+<div style="text-align:center; margin-top: 50px;">
+<img src="img/flow_first.svg" height="200px">
+</div>
 
-# native から先を追うのに必要なもの
-
-* **JNI の知識**
-  * 標準APIの native メソッドも、JNI を利用しているため
-  * 「**ネイティブ関数の解決ルール**」を把握しておけばOK  
-     * ↑ Java の native メソッドに対し、どのネイティブ関数を実行するか決定する取り決め
-* **C, C++ の知識**
-  * 今回の処理程度なら、なんとなくで構わない
 
 ---
 
 # ネイティブ関数の解決ルール
 
-* 2種類あり、状況により使い分ける
 * **ネーミングルール**による解決（動的解決）
   * 「"Java\_" + *クラス完全名* + "\_" + *メソッド名*」という命名規則でネイティブ関数を用意する
     * この名前にしておくと、native メソッドが呼ばれた際に VM が自動で見つけてくれる
 * **関数登録**による解決（静的解決）
-  * RegisterNatives 関数で、Java のメソッド名と対応するネイティブ関数のポインタを登録しておく
+  * RegisterNatives 関数で、Java のメソッド名と対応するネイティブ関数のポインタを明示的に登録しておく
+* この2種類を、状況により使い分ける
   
 ---
 
 class: center, middle
 
 ## currentTimeMillis の場合
+### static イニシャライザーで関数の登録を行っている
 
 ---
 
-# System.java の実装
+# ネイティブ関数の解決（STEP1）
 
-* System クラスの static イニシャライザーで、registerNatives という native メソッドを実行
+* System クラスの static イニシャライザーで、初期化用の native メソッドを実行
 
 ```java
 private static native void registerNatives();
@@ -373,7 +369,7 @@ static {
 
 ---
 
-# JVM_CurrentTimeMillis 関数を登録
+# ネイティブ関数の解決（STEP2）
 
 ```cpp
 JNIEXPORT void JNICALL
@@ -393,6 +389,22 @@ static JNINativeMethod methods[] = {
 
 ---
 
+# ネイティブ関数の解決結果
+
+* currentTimeMillis() に対して **JVM_CurrentTimeMillis** を呼ぶことに決まった
+
+<div style="text-align:center; margin-top: 50px;">
+<img src="img/flow_second.svg" height="200px">
+</div>
+
+---
+
+class: center, middle
+
+## JVM_CurrentTimeMillis の先は？
+
+---
+
 # JVM_CurrentTimeMillis の処理
 
 ```cpp
@@ -401,8 +413,6 @@ JVM_LEAF(jlong, JVM_CurrentTimeMillis(
   return os::javaTimeMillis();
 JVM_END
 ```
-
---
 
 * JVM_LEAF は**関数を定義するマクロ**
   * Safepoint 不可・例外を発生させない・オブジェクトを参照しない関数を定義する
@@ -464,10 +474,8 @@ Ubuntu だと、manpage-ja-dev のインストールが必要
   * それまでは、**gettimeofday**関数を使っていた
 --
 * 変更理由
-  * Instant.now() の内部実装が、精度向上のため clock_gettime に変更になった
-      * gettimeofday の分解能は **1マイクロ秒**
-      * clock_gettime の分解能は **1ナノ秒**
-  * currentTimeMillis() とは実装が独立しているが、念のため同じ関数を使うことにした
+  * **精度向上のため**、Instant.now() の内部実装が gettimeofday（分解能 **1マイクロ秒**）から clock_gettime（分解能 **1ナノ秒**）に変更になった
+  * currentTimeMillis() とは実装が独立しているが、念のため同じ変更を行った
 
 ---
 
@@ -521,7 +529,6 @@ class: center, middle
 # ただし、常にこの通りに
 # 動いているわけではない
 
-
 ---
 
 # @IntrinsicCandidate
@@ -534,7 +541,7 @@ public static native long currentTimeMillis();
 * @IntrinsicCandidate が付与されている
   * **HotSpot VM による個別最適化の対象であることを示す**アノテーション  
 --
-* 今回は、JIT (Just In Time) コンパイル時に適用される
+* 今回は、**JIT コンパイル時に最適化が行われる**
   * System.currentTimeMillis() の呼び出しで、os::javaTimeMillis() を直接実行するようになる
   * **つまり、JNI 呼び出しがなくなる！**
 
@@ -550,10 +557,14 @@ public static native long currentTimeMillis();
 
 * JNI によるオーバーヘッドがなくなる
 <hr>
-* 起動オプション `-XX:+UnlockDiagnosticVMOptions -XX:DisableIntrinsic=_currentTimeMillis` で最適化を無効化できる
-* 1億回の System.currentTimeMillis() の呼び出しにかかる時間の比較
-  * 無効：
-  * 有効：
+* 起動オプションで最適化を無効化できる
+  *  `-XX:+UnlockDiagnosticVMOptions`  
+  `-XX:DisableIntrinsic=_currentTimeMillis`
+* 1億回の currentTimeMillis() の呼び出しにかかる時間
+
+<div style="text-align:center">
+<img src="img/chart.svg">
+</div>
 
 ---
 
@@ -569,10 +580,23 @@ public static native long currentTimeMillis();
 
 * native の先にも処理は続いている
   * Java → JVM → OS → ハードウェア
-* ざっくり理解するぐらいならハードルは低い
-* ただし、@IntrinsicCandidate アノテーションがある場合、最適化による変化に注意  
+* ざっくり理解するだけならハードルは低い
+* @IntrinsicCandidate アノテーションがある場合、最適化による変化に注意  
 <br>
 * **ぜひ、興味のある native メソッドを読んでみましょう！**
+
+---
+
+class: center, middle
+
+# native のその先へ！
+## System.currentTimeMillis() の
+## 実装を見てみよう！
+
+&nbsp;  
+<img src="img/photo.jpg" width="150px;" style="border-radius: 50%; vertical-align: middle;">
+
+@YujiSoftware
 
 ---
 
@@ -582,6 +606,7 @@ public static native long currentTimeMillis();
 * [Java Native Interface仕様](https://docs.oracle.com/javase/jp/24/docs/specs/jni/index.html)
 * [Why is the Win32 epoch January 1, 1601? - The Old New Thing](https://devblogs.microsoft.com/oldnewthing/20090306-00/?p=18913)
 * [高解像度タイム スタンプの取得 - Win32 apps | Microsoft Learn](https://learn.microsoft.com/ja-jp/windows/win32/sysinfo/acquiring-high-resolution-time-stamps)
+* [Linux だと、Instant.now() の分解能が Java のバージョンが上がるごとによくなっている - Qiita](https://qiita.com/YujiSoftware/items/39c0d7922947459f853d)
 
 </textarea>
 <script type="text/javascript">
