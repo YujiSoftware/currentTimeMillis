@@ -587,9 +587,9 @@ public static native long currentTimeMillis();
 # まとめ
 
 * native の先にも処理は続いている
-  * Java → JVM → OS → ハードウェア
-* API の仕様は変わってなくても、実装は変わっていることがある
-* @IntrinsicCandidate アノテーションがある場合、最適化による変化に注意  
+* OpenJDK の実装を追えば、その先を知ることができる  
+<br>
+* @IntrinsicCandidate アノテーションがあるメソッドは、最適化によって動きが変わる点に注意  
 <br>
 * **ぜひ、興味のある native メソッドを読んでみましょう！**
 
